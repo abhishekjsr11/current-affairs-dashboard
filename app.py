@@ -3,80 +3,89 @@ import feedparser
 import urllib.request
 import ssl
 import json
-import pandas as pd
+import re
 from datetime import date
 
-# --- 1. BYPASS BLOCKS ---
+# 1. BOT-BYPASS & SECURITY
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# High-level headers to look like a real browser in India
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/rss+xml, text/xml, */*'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Connection': 'keep-alive'
 }
 
+# 2. THE COMPLETE 2026 UPSC SOURCE LIST
 SOURCES = {
     "PIB - National": "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=1",
+    "PMO - Press Releases": "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3",
+    "PRS India - Policy Blog": "https://prsindia.org/theprsblog/feed",
+    "DD News - National": "https://ddnews.gov.in/en/category/national/feed/",
     "LiveMint - Economy": "https://www.livemint.com/rss/economy",
-    "The Guardian - Tech": "https://www.theguardian.com/technology/rss"
+    "Guardian - International": "https://www.theguardian.com/world/rss",
+    "Guardian - Science & Tech": "https://www.theguardian.com/technology/rss"
 }
 
-# --- 2. THE LIVE ENGINE ---
-st.set_page_config(page_title="UPSC Live Vault", layout="wide")
-st.title("🎯 UPSC Strategic Vault: Live & Archived")
+# 3. UPSC KEYWORD HIGHLIGHTER
+UPSC_KEYWORDS = ["Inflation", "GDP", "RBI", "Constitution", "Supreme Court", "ISRO", "Digital India", "Green Hydrogen", "Quantum", "Semiconductor", "Bill", "Act", "ASEAN", "G20"]
 
-def fetch_live_news():
-    daily_data = {}
-    for name, url in SOURCES.items():
+def highlight_keywords(text):
+    for word in UPSC_KEYWORDS:
+        # Case-insensitive bolding
+        pattern = re.compile(re.escape(word), re.IGNORECASE)
+        text = pattern.sub(f"**{word}**", text)
+    return text
+
+# 4. UI CONFIG
+st.set_page_config(page_title="UPSC Strategic Vault", layout="wide", page_icon="🎯")
+st.title("🛰️ UPSC Strategic Vault: 2026 Live Portal")
+
+if 'master_vault' not in st.session_state:
+    st.session_state.master_vault = {}
+
+# 5. FETCH ENGINE
+def secure_fetch_all():
+    results = {}
+    bar = st.sidebar.progress(0)
+    for i, (name, url) in enumerate(SOURCES.items()):
         try:
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=15) as response:
                 feed = feedparser.parse(response.read())
-                if feed.entries:
-                    daily_data[name] = [{"title": e.title, "link": e.link} for e in feed.entries[:5]]
+            if feed.entries:
+                results[name] = [{"title": e.title, "link": e.link} for e in feed.entries[:7]]
         except Exception as e:
-            st.sidebar.error(f"Error fetching {name}: {str(e)}")
-    return daily_data
+            st.sidebar.warning(f"⚠️ {name} Blocked/Delayed")
+        bar.progress((i + 1) / len(SOURCES))
+    return results
 
-# --- 3. PERSISTENCE LOGIC ---
-# We use st.session_state as a temporary cache and File Download as the permanent backup
-if 'archive' not in st.session_state:
-    st.session_state.archive = {}
+# 6. SIDEBAR CONTROLS
+st.sidebar.header("📂 Archive Management")
+today_str = str(date.today())
 
-if st.button("🔄 Fetch & Archive Today's News"):
-    today_news = fetch_live_news()
-    today_str = str(date.today())
-    st.session_state.archive[today_str] = today_news
-    st.success(f"Fetched news for {today_str}!")
+if st.sidebar.button("🚀 Fetch Today's Live Data"):
+    with st.spinner("Accessing National & Global Feeds..."):
+        daily_data = secure_fetch_all()
+        if daily_data:
+            st.session_state.master_vault[today_str] = daily_data
+            st.sidebar.success(f"Archived for {today_str}")
 
-# --- 4. DISPLAY & DOWNLOAD ---
-selected_date = st.date_input("View Archive for:", date.today())
+# Master Persistence
+st.sidebar.divider()
+if st.session_state.master_vault:
+    js_data = json.dumps(st.session_state.master_vault, indent=4)
+    st.sidebar.download_button("💾 Download Master Archive", js_data, f"UPSC_Vault_{today_str}.json")
+
+upl_vault = st.sidebar.file_uploader("📂 Restore/Upload Archive", type="json")
+if upl_vault:
+    st.session_state.master_vault = json.load(upl_vault)
+    st.sidebar.success("Vault Restored!")
+
+# 7. MAIN DISPLAY
+selected_date = st.date_input("Revision Date:", date.today())
 view_date = str(selected_date)
 
-if view_date in st.session_state.archive:
-    news_content = st.session_state.archive[view_date]
-    cols = st.columns(len(news_content))
-    for i, (source, articles) in enumerate(news_content.items()):
-        with cols[i]:
-            st.subheader(source)
-            for art in articles:
-                st.markdown(f"🔗 [{art['title']}]({art['link']})")
-else:
-    st.info("No data for this date in current session. Fetch today's news or upload archive.")
-
-# --- 5. THE "NEVER LOSE DATA" BUTTON ---
-st.sidebar.divider()
-st.sidebar.subheader("📥 Permanent Backup")
-if st.session_state.archive:
-    json_data = json.dumps(st.session_state.archive, indent=4)
-    st.sidebar.download_button(
-        "Download Full Archive (JSON)",
-        data=json_data,
-        file_name="upsc_master_archive.json",
-        mime="application/json"
-    )
-
-uploaded_file = st.sidebar.file_uploader("Upload Master Archive to Restore", type="json")
-if uploaded_file:
-    st.session_state.archive = json.load(uploaded_file)
-    st.sidebar.success("Archive Restored!")
+if view_date in st.session_state.master_vault:
+    data = st.session_state.master_vault[view_date]
+    col1, col2 = st.columns(2)
+    source_names = list
