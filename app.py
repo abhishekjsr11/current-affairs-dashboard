@@ -1,81 +1,82 @@
 import streamlit as st
 import feedparser
-import os
-import json
 import urllib.request
 import ssl
+import json
+import pandas as pd
 from datetime import date
 
-# --- 1. BYPASS SSL & SET HEADERS ---
-# This fixes "Certificate Verify Failed" errors common on Gov sites
+# --- 1. BYPASS BLOCKS ---
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# Professional Browser Headers to bypass 403 Forbidden
+# High-level headers to look like a real browser in India
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Connection': 'keep-alive',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/rss+xml, text/xml, */*'
 }
-
-# --- 2. SETUP ---
-if not os.path.exists("Archive"): 
-    os.makedirs("Archive")
 
 SOURCES = {
     "PIB - National": "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=1",
-    "PMO - Press Releases": "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3",
-    "DD News - राष्ट्रीय": "https://ddnews.gov.in/en/category/national/feed/",
-    "The Guardian - World": "https://www.theguardian.com/world/rss",
-    "The Guardian - Tech": "https://www.theguardian.com/technology/rss",
-    "PRS India - Policy": "https://prsindia.org/theprsblog/feed",
-    "LiveMint - Economy": "https://www.livemint.com/rss/economy"
+    "LiveMint - Economy": "https://www.livemint.com/rss/economy",
+    "The Guardian - Tech": "https://www.theguardian.com/technology/rss"
 }
 
-# --- 3. UI ---
-st.set_page_config(page_title="UPSC Strategic Vault", layout="wide", page_icon="🎯")
-st.sidebar.title("📑 News Vault")
-selected_date = st.sidebar.date_input("Revision Date", date.today())
+# --- 2. THE LIVE ENGINE ---
+st.set_page_config(page_title="UPSC Live Vault", layout="wide")
+st.title("🎯 UPSC Strategic Vault: Live & Archived")
 
-# --- 4. ENGINE ---
-st.title(f"Strategic Digest: {selected_date}")
-archive_file = f"Archive/{selected_date}.json"
-display_news = {}
-
-if selected_date == date.today():
+def fetch_live_news():
+    daily_data = {}
     for name, url in SOURCES.items():
         try:
-            # Create a sophisticated request
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=15) as response:
-                content = response.read()
-                feed = feedparser.parse(content)
-            
-            if feed.entries:
-                display_news[name] = [{"title": e.title, "link": e.link} for e in feed.entries[:8]]
-            else:
-                st.sidebar.error(f"Empty: {name} (Feed source has no entries today)")
+                feed = feedparser.parse(response.read())
+                if feed.entries:
+                    daily_data[name] = [{"title": e.title, "link": e.link} for e in feed.entries[:5]]
         except Exception as e:
-            # This will now tell you EXACTLY why it failed (e.g., 403 Forbidden)
-            st.sidebar.warning(f"⚠️ {name}: {str(e)}")
+            st.sidebar.error(f"Error fetching {name}: {str(e)}")
+    return daily_data
 
-    if display_news:
-        with open(archive_file, "w", encoding='utf-8') as f: 
-            json.dump(display_news, f, ensure_ascii=False)
-            
-elif os.path.exists(archive_file):
-    with open(archive_file, "r", encoding='utf-8') as f: 
-        display_news = json.load(f)
+# --- 3. PERSISTENCE LOGIC ---
+# We use st.session_state as a temporary cache and File Download as the permanent backup
+if 'archive' not in st.session_state:
+    st.session_state.archive = {}
+
+if st.button("🔄 Fetch & Archive Today's News"):
+    today_news = fetch_live_news()
+    today_str = str(date.today())
+    st.session_state.archive[today_str] = today_news
+    st.success(f"Fetched news for {today_str}!")
+
+# --- 4. DISPLAY & DOWNLOAD ---
+selected_date = st.date_input("View Archive for:", date.today())
+view_date = str(selected_date)
+
+if view_date in st.session_state.archive:
+    news_content = st.session_state.archive[view_date]
+    cols = st.columns(len(news_content))
+    for i, (source, articles) in enumerate(news_content.items()):
+        with cols[i]:
+            st.subheader(source)
+            for art in articles:
+                st.markdown(f"🔗 [{art['title']}]({art['link']})")
 else:
-    st.info("No archive found for this date. Check your sidebar for live errors.")
+    st.info("No data for this date in current session. Fetch today's news or upload archive.")
 
-# --- 5. DISPLAY ---
-if display_news:
-    col1, col2 = st.columns(2)
-    source_names = list(display_news.keys())
-    for i, name in enumerate(source_names):
-        with (col1 if i % 2 == 0 else col2):
-            st.subheader(name)
-            for art in display_news[name]:
-                st.markdown(f"📍 [{art['title']}]({art['link']})")
-            st.divider()
+# --- 5. THE "NEVER LOSE DATA" BUTTON ---
+st.sidebar.divider()
+st.sidebar.subheader("📥 Permanent Backup")
+if st.session_state.archive:
+    json_data = json.dumps(st.session_state.archive, indent=4)
+    st.sidebar.download_button(
+        "Download Full Archive (JSON)",
+        data=json_data,
+        file_name="upsc_master_archive.json",
+        mime="application/json"
+    )
+
+uploaded_file = st.sidebar.file_uploader("Upload Master Archive to Restore", type="json")
+if uploaded_file:
+    st.session_state.archive = json.load(uploaded_file)
+    st.sidebar.success("Archive Restored!")
