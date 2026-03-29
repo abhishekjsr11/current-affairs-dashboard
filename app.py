@@ -1,4 +1,5 @@
-import streamlit as st
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_contextimport streamlit as st
 import feedparser
 import os
 import json
